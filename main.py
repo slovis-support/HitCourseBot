@@ -1,5 +1,9 @@
 import os
 import asyncio
+import sqlite3
+import threading
+import time
+import requests
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
@@ -12,17 +16,30 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
 webhook_path = "/webhook"
 
+# Flask-приложение
 flask_app = Flask(__name__)
 client = OpenAI(api_key=openai_api_key)
+telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
-telegram_app = ApplicationBuilder().token(telegram_token).build()
+# Подключение SQLite
+conn = sqlite3.connect("users.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, name TEXT)")
+conn.commit()
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text( "Привет! Я — Словис, помощник платформы Хиткурс.\n"
-    "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
-    "Спроси — и получи честный, понятный ответ 🧠")
+    user_id = str(update.effective_user.id)
+    name = update.effective_user.first_name
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, name) VALUES (?, ?)", (user_id, name))
+    conn.commit()
+
+    await update.message.reply_text(
+        f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
+        "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
+        "Спроси — и получи честный, понятный ответ 🧠"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -33,6 +50,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
+        cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        name_info = f" (ты — {row[0]})" if row else ""
+
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
@@ -46,7 +67,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
-        await update.message.reply_text(answer)
+        await update.message.reply_text(answer + name_info)
     except Exception as e:
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
@@ -55,7 +76,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Webhook как обычная sync функция
+# Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -73,14 +94,11 @@ def telegram_webhook():
 
     return "OK", 200
 
-import threading
-import time
-import requests
-
+# Keep Alive Ping
 def keep_alive_ping():
     while True:
         try:
-            requests.get(webhook_url)  # используем webhook_url как ping
+            requests.get(webhook_url)
         except Exception as e:
             print("Keep-alive error:", e)
         time.sleep(60)
@@ -89,5 +107,5 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # Запуск Flask
 if __name__ == "__main__":
-    print("🤖 Бот HitCourse (Webhook + Assistant API) запущен на Railway")
+    print("🤖 Бот HitCourse (Webhook + Assistant API + SQLite-память) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
