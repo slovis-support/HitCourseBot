@@ -38,7 +38,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         thread = client.beta.threads.create()
         threads[user_id] = thread.id
 
-    try:print(f"[DEBUG] Входящее сообщение от {user_id}: {user_input}")
+    try:
+        print(f"[DEBUG] Входящее сообщение от {user_id}: {user_input}")
 
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
@@ -53,7 +54,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
-        
+
         print(f"[DEBUG] Ответ: {answer}")
         await update.message.reply_text(answer)
 
