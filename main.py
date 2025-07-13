@@ -55,10 +55,22 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 
 # Webhook как обычная sync функция
 @flask_app.route(webhook_path, methods=["POST"])
-def webhook():
+def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    asyncio.run(telegram_app.process_update(update))
+
+    async def process():
+        await telegram_app.initialize()
+        await telegram_app.process_update(update)
+
+    try:
+        asyncio.get_event_loop().create_task(process())
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(process())
+
     return "OK", 200
+
 import threading
 import time
 import requests
