@@ -54,12 +54,23 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 # Flask-приложение для Webhook
 flask_app = Flask(__name__)
 
+@import asyncio
+
 @flask_app.route("/webhook", methods=["POST"])
 def webhook():
-    telegram_app.initialize()
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    telegram_app.create_task(telegram_app.process_update(update))
+
+    async def process():
+        await telegram_app.initialize()
+        await telegram_app.process_update(update)
+
+    try:
+        asyncio.run(process())
+    except RuntimeError as e:
+        print("⚠️ Ошибка запуска event loop:", e)
+
     return "OK", 200
+
 
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API) запущен.")
