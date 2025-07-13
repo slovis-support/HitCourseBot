@@ -20,7 +20,9 @@ telegram_app = ApplicationBuilder().token(telegram_token).build()
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я — Словис, помощник платформы Хиткурс. Готов помочь! 🧠")
+    await update.message.reply_text( "Привет! Я — Словис, помощник платформы Хиткурс.\n"
+    "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
+    "Спроси — и получи честный, понятный ответ 🧠")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
