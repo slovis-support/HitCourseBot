@@ -59,6 +59,19 @@ def webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
     asyncio.run(telegram_app.process_update(update))
     return "OK", 200
+import threading
+import time
+import requests
+
+def keep_alive_ping():
+    while True:
+        try:
+            requests.get(webhook_url)  # используем webhook_url как ping
+        except Exception as e:
+            print("Keep-alive error:", e)
+        time.sleep(60)
+
+threading.Thread(target=keep_alive_ping, daemon=True).start()
 
 # Запуск Flask
 if __name__ == "__main__":
