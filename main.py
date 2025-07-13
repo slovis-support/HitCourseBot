@@ -25,14 +25,14 @@ threads = {}
 # Подключение SQLite
 conn = sqlite3.connect("users.db", check_same_thread=False)
 cursor = conn.cursor()
-cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, name TEXT)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY, name TEXT, greeted INTEGER DEFAULT 0)")
 conn.commit()
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
-    cursor.execute("INSERT OR REPLACE INTO users (user_id, name) VALUES (?, ?)", (user_id, name))
+    cursor.execute("INSERT OR REPLACE INTO users (user_id, name, greeted) VALUES (?, ?, 1)", (user_id, name))
     conn.commit()
 
     await update.message.reply_text(
@@ -50,9 +50,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        cursor.execute("SELECT name FROM users WHERE user_id = ?", (user_id,))
+        # Получаем имя и статус приветствия
+        cursor.execute("SELECT name, greeted FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
-        name_info = f" (ты — {row[0]})" if row else ""
+        name = row[0] if row else None
+        greeted = row[1] if row else 0
+
+        if name and greeted == 0:
+            await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
+            cursor.execute("UPDATE users SET greeted = 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
 
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
@@ -67,7 +74,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
-        await update.message.reply_text(answer + name_info)
+        await update.message.reply_text(answer)
+
     except Exception as e:
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
