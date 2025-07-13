@@ -12,10 +12,10 @@ from openai import OpenAI
 openai_api_key = os.getenv("OPENAI_API_KEY")
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
 telegram_token = os.getenv("TELEGRAM_TOKEN")
-webhook_url = os.getenv("WEBHOOK_URL", "")  # без /webhook
+webhook_url = os.getenv("WEBHOOK_URL")  # без /webhook на конце
 webhook_path = "/webhook"
 
-# OpenAI клиент и память пользователей
+# OpenAI клиент
 client = OpenAI(api_key=openai_api_key)
 threads = {}
 
@@ -25,10 +25,10 @@ flask_app = Flask(__name__)
 # Telegram приложение
 app = ApplicationBuilder().token(telegram_token).build()
 
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Привет! Я — Словис, помощник платформы Хиткурс. Чем помочь? 🧠")
-
+    await update.message.reply_text(
+        "Привет! Я — Словис, помощник платформы Хиткурс. Готов помочь тебе с обучением и вопросами! 🧠"
+    )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -39,8 +39,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        print(f"[DEBUG] Входящее сообщение от {user_id}: {user_input}")
-
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
@@ -54,21 +52,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
-
-        print(f"[DEBUG] Ответ: {answer}")
         await update.message.reply_text(answer)
 
     except Exception as e:
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
-
-# Регистрируем обработчики
+# Регистрируем хендлеры
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-
-# Обработка Telegram Webhook во Flask (через asyncio loop)
+# Обработка Telegram Webhook во Flask
 @flask_app.route(webhook_path, methods=["POST"])
 def webhook():
     try:
@@ -80,7 +74,7 @@ def webhook():
         loop.create_task(app.process_update(update))
     return "OK", 200
 
-
+# Запуск Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
