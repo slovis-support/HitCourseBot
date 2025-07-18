@@ -18,6 +18,7 @@ webhook_path = "/webhook"
 
 # Flask-приложение
 flask_app = Flask(__name__)
+CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
 telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
