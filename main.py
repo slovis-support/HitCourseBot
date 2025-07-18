@@ -112,6 +112,36 @@ def keep_alive_ping():
         time.sleep(60)
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
+@flask_app.route("/message", methods=["POST"])
+def web_chat():
+    try:
+        data = request.get_json()
+        user_message = data.get("message", "")
+        if not user_message.strip():
+            return {"reply": "Пустое сообщение."}, 400
+
+        # Используем один общий thread для сайта
+        if "web" not in threads:
+            thread = client.beta.threads.create()
+            threads["web"] = thread.id
+
+        # Отправляем сообщение ассистенту
+        client.beta.threads.messages.create(
+            thread_id=threads["web"],
+            role="user",
+            content=user_message
+        )
+        run = client.beta.threads.runs.create_and_poll(
+            thread_id=threads["web"],
+            assistant_id=assistant_id
+        )
+        messages = client.beta.threads.messages.list(thread_id=threads["web"])
+        reply = messages.data[0].content[0].text.value
+        return {"reply": reply}
+
+    except Exception as e:
+        print("Ошибка в /message:", e)
+        return {"reply": "Произошла ошибка на сервере."}, 500
 
 # Запуск Flask
 if __name__ == "__main__":
