@@ -5,6 +5,7 @@ import threading
 import time
 import requests
 from flask import Flask, request
+from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
@@ -37,7 +38,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     await update.message.reply_text(
-    f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
+        f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
         "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
         "Спроси — и получи честный, понятный ответ 🧠"
     )
@@ -51,7 +52,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        # Получаем имя и статус приветствия
         cursor.execute("SELECT name, greeted FROM users WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         name = row[0] if row else None
@@ -113,6 +113,7 @@ def keep_alive_ping():
         time.sleep(60)
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
+
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -121,12 +122,10 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        # Используем один общий thread для сайта
         if "web" not in threads:
             thread = client.beta.threads.create()
             threads["web"] = thread.id
 
-        # Отправляем сообщение ассистенту
         client.beta.threads.messages.create(
             thread_id=threads["web"],
             role="user",
