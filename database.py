@@ -1,11 +1,11 @@
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker
 from datetime import datetime
+import os
 
-# 🔗 Подключение к PostgreSQL
-DATABASE_URL = "postgresql://postgres:HMNwRXohqjAKGPpRLjaXGZToShilJUCc@mainline.proxy.rlwy.net:12203/railway"
+# 🔗 Подключение к PostgreSQL через переменную окружения
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Создание движка и сессии
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -15,9 +15,9 @@ class User(Base):
     __tablename__ = "users"
     user_id = Column(String, primary_key=True, index=True)
     name = Column(String)
-    greeted = Column(String)  # можно заменить на Boolean, если нужно
+    greeted = Column(String)  # может быть "yes" или None
 
-# 💬 Таблица сообщений (для памяти)
+# 💬 Таблица сообщений
 class Message(Base):
     __tablename__ = "messages"
     id = Column(Integer, primary_key=True, index=True)
@@ -26,6 +26,6 @@ class Message(Base):
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-# Создание таблиц при запуске
-if __name__ == "__main__":
+# Инициализация таблиц
+def init_db():
     Base.metadata.create_all(bind=engine)
