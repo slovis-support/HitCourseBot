@@ -9,6 +9,7 @@ from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
+from database import Base, engine  # 👈 импорт из database.py
 
 # Переменные окружения
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -17,6 +18,9 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
 database_url = os.getenv("DATABASE_URL")
 webhook_path = "/webhook"
+
+# Создание таблиц, если их нет
+Base.metadata.create_all(bind=engine)
 
 # Flask-приложение
 flask_app = Flask(__name__)
@@ -57,6 +61,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
+    lowered = user_input.lower()
 
     if user_id not in threads:
         thread = client.beta.threads.create()
@@ -72,19 +77,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
             conn.commit()
 
+        if "меня зовут" in lowered:
+            name = user_input.split("меня зовут", 1)[-1].strip().strip(".! ")
+            if name:
+                cur.execute("UPDATE users SET name = %s WHERE user_id = %s", (name, user_id))
+                conn.commit()
+                await update.message.reply_text(f"Приятно познакомиться, {name}! Запомнил 😊")
+                return
+
+        if "как меня зовут" in lowered:
+            if name:
+                await update.message.reply_text(f"Тебя зовут {name}! 😊")
+            else:
+                await update.message.reply_text("Пока не знаю твоего имени. Напиши: «меня зовут ...»")
+            return
+
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
             content=user_input
         )
-
         client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id],
             assistant_id=assistant_id
         )
-
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
+
+        if name and not ("как меня зовут" in lowered or "меня зовут" in lowered):
+            answer = f"{name}, {answer}"
+
         await update.message.reply_text(answer)
 
     except Exception as e:
@@ -158,3 +180,4 @@ def web_chat():
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
