@@ -116,4 +116,4 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 # Запуск Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + SQLite-память) запущен на Railway")
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
