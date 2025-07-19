@@ -12,6 +12,13 @@ from openai import OpenAI
 from database import Base, engine, SessionLocal, User, Message  # 👈 импорт всех моделей
 from datetime import datetime
 
+# 🔄 Обёртка для запуска async из потока
+def run_async(coro):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(coro)
+    loop.close()
+
 # Переменные окружения
 openai_api_key = os.getenv("OPENAI_API_KEY")
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
@@ -34,16 +41,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
     db = SessionLocal()
-
-    user = db.query(User).filter_by(user_id=user_id).first()
-    if not user:
-        user = User(user_id=user_id, name=name, greeted="yes")
-        db.add(user)
-    else:
-        user.name = name
-        user.greeted = "yes"
-    db.commit()
-    db.close()
+    try:
+        user = db.query(User).filter_by(user_id=user_id).first()
+        if not user:
+            user = User(user_id=user_id, name=name, greeted="yes")
+            db.add(user)
+        else:
+            user.name = name
+            user.greeted = "yes"
+        db.commit()
+    finally:
+        db.close()
 
     await update.message.reply_text(
         f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
@@ -56,70 +64,70 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text
     lowered = user_input.lower()
     db = SessionLocal()
+    try:
+        user = db.query(User).filter_by(user_id=user_id).first()
+        name = user.name if user else None
 
-    user = db.query(User).filter_by(user_id=user_id).first()
-    name = user.name if user else None
+        # Обработка имени
+        if "меня зовут" in lowered:
+            name = user_input.split("меня зовут", 1)[-1].strip().strip(".! ")
+            if user:
+                user.name = name
+            else:
+                user = User(user_id=user_id, name=name)
+                db.add(user)
+            db.commit()
+            await update.message.reply_text(f"Приятно познакомиться, {name}! Запомнил 😊")
+            return
 
-    # Обработка имени
-    if "меня зовут" in lowered:
-        name = user_input.split("меня зовут", 1)[-1].strip().strip(".! ")
-        if user:
-            user.name = name
-        else:
-            user = User(user_id=user_id, name=name)
-            db.add(user)
-        db.commit()
-        db.close()
-        await update.message.reply_text(f"Приятно познакомиться, {name}! Запомнил 😊")
-        return
+        if "как меня зовут" in lowered:
+            if name:
+                await update.message.reply_text(f"Тебя зовут {name}! 😊")
+            else:
+                await update.message.reply_text("Пока не знаю твоего имени. Напиши: «меня зовут ...»")
+            return
 
-    if "как меня зовут" in lowered:
-        if name:
-            await update.message.reply_text(f"Тебя зовут {name}! 😊")
-        else:
-            await update.message.reply_text("Пока не знаю твоего имени. Напиши: «меня зовут ...»")
-        db.close()
-        return
+        # Создание потока в OpenAI
+        if user_id not in threads:
+            thread = client.beta.threads.create()
+            threads[user_id] = thread.id
 
-    # Создание потока в OpenAI
-    if user_id not in threads:
-        thread = client.beta.threads.create()
-        threads[user_id] = thread.id
+        # Получение последних 10 сообщений
+        history = db.query(Message).filter_by(user_id=user_id).order_by(Message.timestamp.desc()).limit(10).all()
+        for m in reversed(history):
+            client.beta.threads.messages.create(
+                thread_id=threads[user_id],
+                role=m.role,
+                content=m.content
+            )
 
-    # Получение последних 10 сообщений
-    history = db.query(Message).filter_by(user_id=user_id).order_by(Message.timestamp.desc()).limit(10).all()
-    for m in reversed(history):
+        # Отправка нового сообщения пользователя
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
-            role=m.role,
-            content=m.content
+            role="user",
+            content=user_input
         )
+        db.add(Message(user_id=user_id, role="user", content=user_input))
+        db.commit()
 
-    # Отправка нового сообщения пользователя
-    client.beta.threads.messages.create(
-        thread_id=threads[user_id],
-        role="user",
-        content=user_input
-    )
-    db.add(Message(user_id=user_id, role="user", content=user_input))
-    db.commit()
+        # Получение ответа OpenAI
+        client.beta.threads.runs.create_and_poll(
+            thread_id=threads[user_id],
+            assistant_id=assistant_id
+        )
+        messages = client.beta.threads.messages.list(thread_id=threads[user_id])
+        answer = messages.data[0].content[0].text.value
 
-    # Получение ответа OpenAI
-    client.beta.threads.runs.create_and_poll(
-        thread_id=threads[user_id],
-        assistant_id=assistant_id
-    )
-    messages = client.beta.threads.messages.list(thread_id=threads[user_id])
-    answer = messages.data[0].content[0].text.value
-    
-    db.add(Message(user_id=user_id, role="assistant", content=answer))
-    db.commit()
-    db.close()
+        db.add(Message(user_id=user_id, role="assistant", content=answer))
+        db.commit()
 
-    if name and not ("меня зовут" in lowered or "как меня зовут" in lowered):
-        answer = f"{name}, {answer}"
+        if name and not ("меня зовут" in lowered or "как меня зовут" in lowered):
+            answer = f"{name}, {answer}"
 
-    await update.message.reply_text(answer)
+        await update.message.reply_text(answer)
+
+    finally:
+        db.close()
 
 # Регистрируем обработчики
 telegram_app.add_handler(CommandHandler("start", start))
@@ -134,13 +142,7 @@ def telegram_webhook():
         await telegram_app.initialize()
         await telegram_app.process_update(update)
 
-    try:
-        asyncio.get_event_loop().create_task(process())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(process())
-
+    threading.Thread(target=run_async, args=(process(),)).start()
     return "OK", 200
 
 # Keep-alive ping
@@ -154,7 +156,7 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# Flask WebApp (если хочешь оставить)
+# WebApp маршрут
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
