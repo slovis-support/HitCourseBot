@@ -157,4 +157,4 @@ def web_chat():
 # Запуск Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("
+    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
