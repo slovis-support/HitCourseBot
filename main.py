@@ -1,9 +1,11 @@
+from database import SessionLocal, User, init_db
+
+init_db()
 import os
 import asyncio
 import threading
 import time
 import requests
-import psycopg2
 from flask import Flask, request
 from flask_cors import CORS
 from telegram import Update
@@ -15,7 +17,6 @@ openai_api_key = os.getenv("OPENAI_API_KEY")
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
-database_url = os.getenv("DATABASE_URL")
 webhook_path = "/webhook"
 
 # Flask-приложение
@@ -25,32 +26,34 @@ client = OpenAI(api_key=openai_api_key)
 telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
-# Подключение PostgreSQL
-conn = psycopg2.connect(database_url)
-cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    name TEXT,
-    greeted BOOLEAN DEFAULT FALSE
-)
-""")
-conn.commit()
+# ======== Новая память пользователя =========
+def handle_user_message(user_id, text):
+    db = SessionLocal()
+    user = db.query(User).filter(User.telegram_id == str(user_id)).first()
+
+    if text.lower().startswith("я "):
+        name = text[2:].strip()
+        if user:
+            user.name = name
+        else:
+            user = User(telegram_id=str(user_id), name=name)
+            db.add(user)
+        db.commit()
+        return f"Приятно познакомиться, {name}!"
+
+    if "как меня зовут" in text.lower():
+        if user and user.name:
+            return f"Тебя зовут {user.name}!"
+        else:
+            return "Я пока не знаю, как тебя зовут. Напиши: 'я [твоё имя]' 😊"
+
+    return None
+# ============================================
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    name = update.effective_user.first_name
-    cur.execute("""
-        INSERT INTO users (user_id, name, greeted)
-        VALUES (%s, %s, TRUE)
-        ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
-    """, (user_id, name))
-    conn.commit()
-
     await update.message.reply_text(
-        f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
-        "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
+        "Привет! Я — Словис, помощник платформы Хиткурс.\n"
         "Спроси — и получи честный, понятный ответ 🧠"
     )
 
@@ -58,20 +61,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
 
+    # Проверка на имя или "как меня зовут"
+    reply = handle_user_message(user_id, user_input)
+    if reply:
+        await update.message.reply_text(reply)
+        return
+
+    # Работа с Assistant API
     if user_id not in threads:
         thread = client.beta.threads.create()
         threads[user_id] = thread.id
 
     try:
-        cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        name, greeted = row if row else (None, False)
-
-        if name and not greeted:
-            await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
-            cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
-            conn.commit()
-
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
