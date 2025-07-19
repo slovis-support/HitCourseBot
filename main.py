@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 from openai import OpenAI
 from database import SessionLocal, User, init_db
 
-# Инициализируем базу данных
+# Инициализация базы данных
 init_db()
 
 # Переменные окружения
@@ -27,7 +27,7 @@ client = OpenAI(api_key=openai_api_key)
 telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
-# Обработчики Telegram
+# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
@@ -48,29 +48,45 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Спроси — и получи честный, понятный ответ 🧠"
     )
 
+# Сообщения Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
-    user_input = update.message.text
+    user_input = update.message.text.strip()
     db = SessionLocal()
 
     user = db.query(User).filter_by(telegram_id=user_id).first()
     name = user.name if user else None
-
-    # Обработка команды "меня зовут ..."
     lowered = user_input.lower()
-    if "меня зовут" in lowered:
-        new_name = lowered.split("меня зовут", 1)[1].strip().split(" ")[0].capitalize()
-        if user:
-            user.name = new_name
+
+    # Обработка фразы "как меня зовут"
+    if "как меня зовут" in lowered:
+        if name:
+            await update.message.reply_text(f"Тебя зовут {name} 😊")
         else:
-            user = User(telegram_id=user_id, name=new_name)
-            db.add(user)
-        db.commit()
+            await update.message.reply_text("Я пока не знаю, как тебя зовут. Напиши: «Меня зовут ...»")
         db.close()
-        await update.message.reply_text(f"Приятно познакомиться, {new_name}! Запомнил 😊")
         return
 
-    # GPT поток
+    # Обработка фразы "меня зовут ..."
+    if "меня зовут" in lowered:
+        try:
+            new_name = user_input.lower().split("меня зовут", 1)[1].strip().split(" ")[0].capitalize()
+            if new_name:
+                if user:
+                    user.name = new_name
+                else:
+                    user = User(telegram_id=user_id, name=new_name)
+                    db.add(user)
+                db.commit()
+                await update.message.reply_text(f"Приятно познакомиться, {new_name}! Запомнил 😊")
+            else:
+                await update.message.reply_text("Я не понял имя. Напиши, например: Меня зовут Алексей.")
+        except:
+            await update.message.reply_text("Я не смог распознать имя. Попробуй ещё раз.")
+        db.close()
+        return
+
+    # GPT-ответ
     if user_id not in threads:
         thread = client.beta.threads.create()
         threads[user_id] = thread.id
@@ -88,9 +104,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
-        # Вставляем имя, если есть
         if name:
-            reply = reply.replace("Я Словис", f"Я Словис. Приятно снова тебя видеть, {name}")
+            reply = f"{name}, {reply}"
         await update.message.reply_text(reply)
 
     except Exception as e:
@@ -103,7 +118,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Обработка Webhook
+# Webhook от Telegram
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -121,7 +136,7 @@ def telegram_webhook():
 
     return "OK", 200
 
-# Keep Alive Ping
+# Keep-alive пинг
 def keep_alive_ping():
     while True:
         try:
@@ -132,7 +147,7 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# WebApp Route
+# WebApp маршрут
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -162,7 +177,7 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-# Запуск Flask
+# Запуск
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL ORM) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
