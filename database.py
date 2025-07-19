@@ -1,21 +1,26 @@
-from sqlalchemy import create_engine, Column, String, Integer, Boolean
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import os
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.orm import declarative_base, sessionmaker
+from datetime import datetime
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+# 🔗 Подключение к PostgreSQL на Railway
+DATABASE_URL = "postgresql://postgres:HMNwRXohqjAKGPpRLjaXGZToShilJUCc@mainline.proxy.rlwy.net:12203/railway"
 
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
+# 👤 Таблица пользователей
 class User(Base):
     __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True)
+    user_id = Column(String, primary_key=True, index=True)
     name = Column(String)
-    greeted = Column(Boolean, default=False)  # 👈 добавили флаг приветствия
+    greeted = Column(String)  # может быть "yes" или None
 
-def init_db():
-    Base.metadata.create_all(bind=engine)
+# 💬 Таблица сообщений
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    role = Column(String)  # "user" или "assistant"
+    content = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow)
