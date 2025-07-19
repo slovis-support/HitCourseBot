@@ -1,3 +1,4 @@
+from database import SessionLocal, User, Message
 import os
 import asyncio
 import threading
