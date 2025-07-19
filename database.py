@@ -24,3 +24,5 @@ class Message(Base):
     role = Column(String)  # "user" или "assistant"
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
+if __name__ == "__main__":
+    Base.metadata.create_all(bind=engine)
