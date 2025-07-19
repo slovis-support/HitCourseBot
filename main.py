@@ -27,7 +27,7 @@ client = OpenAI(api_key=openai_api_key)
 telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
-# Обработчики Telegram
+# Обработчик /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
@@ -48,6 +48,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Спроси — и получи честный, понятный ответ 🧠"
     )
 
+# Обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
@@ -61,6 +62,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
+        if user_input.lower().startswith("меня зовут "):
+            new_name = user_input[11:].strip().capitalize()
+            if user:
+                user.name = new_name
+            else:
+                user = User(telegram_id=user_id, name=new_name)
+                db.add(user)
+            db.commit()
+            await update.message.reply_text(f"Хорошо, {new_name}, я запомнил 😊")
+            return
+
+        if "как меня зовут" in user_input.lower():
+            if name:
+                await update.message.reply_text(f"Тебя зовут {name}, я помню! 😊")
+            else:
+                await update.message.reply_text("Я пока не знаю твоего имени. Напиши: «меня зовут Алексей»")
+            return
+
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
@@ -82,11 +101,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         db.close()
 
-# Регистрируем обработчики
+# Регистрируем хендлеры
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Обработка Webhook
+# Webhook от Telegram
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -104,7 +123,7 @@ def telegram_webhook():
 
     return "OK", 200
 
-# Keep Alive Ping
+# Keep Alive
 def keep_alive_ping():
     while True:
         try:
@@ -115,7 +134,7 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# WebApp Route
+# WebApp (например, с Tilda)
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -145,7 +164,7 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-# Запуск Flask
+# Старт Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL ORM) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
