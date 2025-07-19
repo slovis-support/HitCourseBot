@@ -26,7 +26,19 @@ telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
 # PostgreSQL
-conn = psycopg2.connect(database_url)
+import urllib.parse as up
+up.uses_netloc.append("postgres")
+url = up.urlparse(database_url)
+
+conn = psycopg2.connect(
+    dbname=url.path[1:],
+    user=url.username,
+    password=url.password,
+    host=url.hostname,
+    port=url.port,
+    sslmode="require"
+)
+
 cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS users (
