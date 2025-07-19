@@ -19,5 +19,8 @@ class User(Base):
     name = Column(String)
 
 # Инициализация базы
+# Инициализация базы
 def init_db():
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.drop_all(bind=engine)      # ❗️УДАЛЯЕТ ВСЮ СХЕМУ (временно)
+    Base.metadata.create_all(bind=engine)    # Создаёт новую таблицу с нужными колонками
+
