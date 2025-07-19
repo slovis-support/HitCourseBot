@@ -3,19 +3,21 @@ import asyncio
 import threading
 import time
 import requests
-import psycopg2
 from flask import Flask, request
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
+from database import SessionLocal, User, init_db
+
+# Инициализируем базу данных
+init_db()
 
 # Переменные окружения
 openai_api_key = os.getenv("OPENAI_API_KEY")
 assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
 telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
-database_url = os.getenv("DATABASE_URL")
 webhook_path = "/webhook"
 
 # Flask-приложение
@@ -25,28 +27,20 @@ client = OpenAI(api_key=openai_api_key)
 telegram_app = ApplicationBuilder().token(telegram_token).build()
 threads = {}
 
-# Подключение PostgreSQL
-conn = psycopg2.connect(database_url)
-cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    name TEXT,
-    greeted BOOLEAN DEFAULT FALSE
-)
-""")
-conn.commit()
-
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
-    cur.execute("""
-        INSERT INTO users (user_id, name, greeted)
-        VALUES (%s, %s, TRUE)
-        ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
-    """, (user_id, name))
-    conn.commit()
+    db = SessionLocal()
+
+    user = db.query(User).filter_by(telegram_id=user_id).first()
+    if not user:
+        user = User(telegram_id=user_id, name=name)
+        db.add(user)
+    else:
+        user.name = name
+    db.commit()
+    db.close()
 
     await update.message.reply_text(
         f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
@@ -57,21 +51,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
+    db = SessionLocal()
+
+    user = db.query(User).filter_by(telegram_id=user_id).first()
+    name = user.name if user else None
 
     if user_id not in threads:
         thread = client.beta.threads.create()
         threads[user_id] = thread.id
 
     try:
-        cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        name, greeted = row if row else (None, False)
-
-        if name and not greeted:
-            await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
-            cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
-            conn.commit()
-
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
@@ -90,6 +79,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
+    finally:
+        db.close()
 
 # Регистрируем обработчики
 telegram_app.add_handler(CommandHandler("start", start))
@@ -142,7 +133,7 @@ def web_chat():
             role="user",
             content=user_message
         )
-        run = client.beta.threads.runs.create_and_poll(
+        client.beta.threads.runs.create_and_poll(
             thread_id=threads["web"],
             assistant_id=assistant_id
         )
@@ -156,5 +147,5 @@ def web_chat():
 
 # Запуск Flask
 if __name__ == "__main__":
-    print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
+    print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL ORM) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
