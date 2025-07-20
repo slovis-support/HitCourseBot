@@ -35,7 +35,6 @@ class Message(Base):
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
 
-# 🔽 ВСТАВЬ СЮДА
 def save_message(user_id, role, content):
     db = SessionLocal()
     message = Message(user_id=user_id, role=role, content=content)
@@ -54,6 +53,12 @@ def get_last_messages(user_id, limit=10):
     )
     db.close()
     return reversed(messages)
+
+def clear_messages(user_id):
+    db = SessionLocal()
+    db.query(Message).filter(Message.user_id == user_id).delete()
+    db.commit()
+    db.close()
 
 # Создаём таблицы при первом запуске
 Base.metadata.create_all(bind=engine)
@@ -111,7 +116,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        # Проверка имени
         cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
         row = cur.fetchone()
         name, greeted = row if row else (None, False)
@@ -121,7 +125,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
             conn.commit()
 
-        # Загружаем последние сообщения
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
@@ -130,14 +133,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 content=msg.content
             )
 
-        # Добавляем новое сообщение от пользователя
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
             content=user_input
         )
 
-        # Получаем ответ
         client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id],
             assistant_id=assistant_id
@@ -146,7 +147,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
-        # Сохраняем в БД
         save_message(user_id, "user", user_input)
         save_message(user_id, "assistant", answer)
 
@@ -156,11 +156,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
-# Регистрируем обработчики
+async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    clear_messages(user_id)
+    await update.message.reply_text("История сообщений очищена 🧹")
+
 telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("clear", clear_history))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -178,7 +182,6 @@ def telegram_webhook():
 
     return "OK", 200
 
-# Keep Alive Ping
 def keep_alive_ping():
     while True:
         try:
@@ -189,7 +192,6 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# WebApp Route
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -198,12 +200,11 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        user_id = "web_user"  # Можно заменить на уникальный ID
+        user_id = "web_user"
         if user_id not in threads:
             thread = client.beta.threads.create()
             threads[user_id] = thread.id
 
-        # Загружаем историю последних сообщений из БД
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
@@ -212,7 +213,6 @@ def web_chat():
                 content=msg.content
             )
 
-        # Текущее сообщение от пользователя
         client.beta.threads.messages.create(
             thread_id=threads[user_id],
             role="user",
@@ -226,7 +226,6 @@ def web_chat():
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
-        # Сохраняем в базу: вопрос и ответ
         save_message(user_id, "user", user_message)
         save_message(user_id, "assistant", reply)
 
@@ -236,7 +235,6 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-# Запуск Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
