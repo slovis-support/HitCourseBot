@@ -9,6 +9,34 @@ from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from datetime import datetime
+
+# URL БД из Railway
+DATABASE_URL = f"postgresql://{os.environ['PGUSER']}:{os.environ['POSTGRES_PASSWORD']}@{os.environ['RAILWAY_PRIVATE_DOMAIN']}:5432/{os.environ['PGDATABASE']}"
+
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True, index=True)
+    telegram_id = Column(String, unique=True, index=True)
+    name = Column(String)
+
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    role = Column(String)
+    content = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+
+# Создаём таблицы при первом запуске
+Base.metadata.create_all(bind=engine)
 
 # Переменные окружения
 openai_api_key = os.getenv("OPENAI_API_KEY")
