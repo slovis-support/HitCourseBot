@@ -9,8 +9,7 @@ from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
@@ -22,21 +21,6 @@ from models import Base, User, Message  # Импортируем из models.py
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base.metadata.create_all(bind=engine)
-
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(String, unique=True, index=True)
-    name = Column(String)
-
-class Message(Base):
-    __tablename__ = "messages"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, index=True)
-    role = Column(String)
-    content = Column(Text)
-    timestamp = Column(DateTime, default=datetime.utcnow)
 
 def save_message(user_id, role, content):
     db = SessionLocal()
@@ -209,7 +193,6 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        # Добавляем пользователя в БД, если не было
         cur.execute("""
             INSERT INTO users (user_id, name, greeted)
             VALUES (%s, %s, TRUE)
