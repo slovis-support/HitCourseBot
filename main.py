@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
 # URL БД из Railway
-DATABASE_URL = f"postgresql://{os.environ['PGUSER']}:{os.environ['POSTGRES_PASSWORD']}@{os.environ['RAILWAY_PRIVATE_DOMAIN']}:5432/{os.environ['PGDATABASE']}"
+DATABASE_URL = os.environ['DATABASE_URL']
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
