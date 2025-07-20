@@ -111,6 +111,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
 
+    if user_input.strip().lower() == "/clear":
+        clear_messages(user_id)
+        await update.message.reply_text("История очищена 🗑️")
+        return
+
     if user_id not in threads:
         thread = client.beta.threads.create()
         threads[user_id] = thread.id
@@ -156,15 +161,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
-async def clear_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
-    clear_messages(user_id)
-    await update.message.reply_text("История сообщений очищена 🧹")
-
+# Регистрируем обработчики
 telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("clear", clear_history))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+# Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -182,6 +183,7 @@ def telegram_webhook():
 
     return "OK", 200
 
+# Keep Alive Ping
 def keep_alive_ping():
     while True:
         try:
@@ -192,15 +194,26 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
+# WebApp Route
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
         data = request.get_json()
         user_message = data.get("message", "")
+        user_id = data.get("user_id", "web_user")
+        user_name = data.get("name", "Гость")
+
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        user_id = "web_user"
+        # Добавляем пользователя в БД, если не было
+        cur.execute("""
+            INSERT INTO users (user_id, name, greeted)
+            VALUES (%s, %s, TRUE)
+            ON CONFLICT (user_id) DO NOTHING
+        """, (user_id, user_name))
+        conn.commit()
+
         if user_id not in threads:
             thread = client.beta.threads.create()
             threads[user_id] = thread.id
@@ -235,6 +248,7 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
+# Запуск Flask
 if __name__ == "__main__":
     print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
