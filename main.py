@@ -34,6 +34,33 @@ class Message(Base):
     role = Column(String)
     content = Column(Text)
     timestamp = Column(DateTime, default=datetime.utcnow)
+class Message(Base):
+    __tablename__ = "messages"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)
+    role = Column(String)
+    content = Column(Text)
+    timestamp = Column(DateTime, default=datetime.utcnow)  # ← после этой строки вставляешь
+
+# 🔽 ВСТАВЬ СЮДА
+def save_message(user_id, role, content):
+    db = SessionLocal()
+    message = Message(user_id=user_id, role=role, content=content)
+    db.add(message)
+    db.commit()
+    db.close()
+
+def get_last_messages(user_id, limit=10):
+    db = SessionLocal()
+    messages = (
+        db.query(Message)
+        .filter(Message.user_id == user_id)
+        .order_by(Message.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    db.close()
+    return reversed(messages)
 
 # Создаём таблицы при первом запуске
 Base.metadata.create_all(bind=engine)
