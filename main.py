@@ -17,11 +17,12 @@ from datetime import datetime
 # URL БД из Railway
 DATABASE_URL = os.environ['DATABASE_URL']
 
+from models import Base, User, Message  # Импортируем из models.py
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-# Создание таблиц, если их нет
 Base.metadata.create_all(bind=engine)
+
 
 class User(Base):
     __tablename__ = "users"
