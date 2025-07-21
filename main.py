@@ -92,6 +92,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка в start:", e)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
     user_input = update.message.text
 
