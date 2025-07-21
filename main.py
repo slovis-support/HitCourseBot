@@ -29,9 +29,6 @@ Base.metadata.create_all(bind=engine)
 
 # Telegram и Flask
 telegram_app = ApplicationBuilder().token(telegram_token).build()
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
 flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
@@ -145,25 +142,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
+# Добавляем хендлеры после определения функций
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
 # Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-
     async def process():
         await telegram_app.initialize()
         await telegram_app.process_update(update)
-
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(process())
     except Exception as e:
         print("Webhook error:", e)
-
     return "OK", 200
 
 # Keep Alive Ping
+
 def keep_alive_ping():
     while True:
         try:
@@ -226,5 +225,5 @@ def web_chat():
 
 # Запуск
 if __name__ == "__main__":
-    print("🧐 Бот HitCourse запущен")
+    print("\U0001F9D0 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
