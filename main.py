@@ -145,13 +145,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
+
     async def process():
         await telegram_app.initialize()
         await telegram_app.process_update(update)
+
     try:
-        asyncio.run(process())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(process())
     except Exception as e:
         print("Webhook error:", e)
+
     return "OK", 200
 
 # Keep Alive Ping
@@ -218,5 +223,5 @@ def web_chat():
 
 # Запуск
 if __name__ == "__main__":
-    print("🤖 Бот HitCourse запущен")
+    print("🧐 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
