@@ -12,20 +12,31 @@ from openai import OpenAI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
+from models import Base, User, Message
 
-# URL БД из Railway
+# Переменные окружения
 DATABASE_URL = os.environ['DATABASE_URL']
+openai_api_key = os.getenv("OPENAI_API_KEY")
+assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
+telegram_token = os.getenv("TELEGRAM_TOKEN")
+webhook_url = os.getenv("WEBHOOK_URL")
+webhook_path = "/webhook"
 
-from models import Base, User, Message  # Импортируем из models.py
-
+# SQLAlchemy
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base.metadata.create_all(bind=engine)
 
+# Telegram и Flask
+telegram_app = ApplicationBuilder().token(telegram_token).build()
+flask_app = Flask(__name__)
+CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
+client = OpenAI(api_key=openai_api_key)
+threads = {}
+
 def save_message(user_id, role, content):
     db = SessionLocal()
-    message = Message(user_id=user_id, role=role, content=content)
-    db.add(message)
+    db.add(Message(user_id=user_id, role=role, content=content))
     db.commit()
     db.close()
 
@@ -47,51 +58,33 @@ def clear_messages(user_id):
     db.commit()
     db.close()
 
-# Создаём таблицы при первом запуске
-Base.metadata.create_all(bind=engine)
-
-# Переменные окружения
-openai_api_key = os.getenv("OPENAI_API_KEY")
-assistant_id = os.getenv("OPENAI_ASSISTANT_ID")
-telegram_token = os.getenv("TELEGRAM_TOKEN")
-webhook_url = os.getenv("WEBHOOK_URL")
-database_url = os.getenv("DATABASE_URL")
-webhook_path = "/webhook"
-
-# Flask-приложение
-flask_app = Flask(__name__)
-CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
-client = OpenAI(api_key=openai_api_key)
-telegram_app = ApplicationBuilder().token(telegram_token).build()
-threads = {}
-
-# Подключение PostgreSQL
-conn = psycopg2.connect(database_url)
-with conn.cursor() as cur:
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        user_id TEXT PRIMARY KEY,
-        name TEXT,
-        greeted BOOLEAN DEFAULT FALSE
-    )
-    """)
-    conn.commit()
+# Создание таблицы users
+with psycopg2.connect(DATABASE_URL) as conn:
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                name TEXT,
+                greeted BOOLEAN DEFAULT FALSE
+            )
+        """)
+        conn.commit()
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
-    with conn.cursor() as cur:
-        cur.execute("""
-            INSERT INTO users (user_id, name, greeted)
-            VALUES (%s, %s, TRUE)
-            ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
-        """, (user_id, name))
-        conn.commit()
+    with psycopg2.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (user_id, name, greeted)
+                VALUES (%s, %s, TRUE)
+                ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
+            """, (user_id, name))
+            conn.commit()
 
     await update.message.reply_text(
         f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
-        "Здесь, чтобы помочь тебе ориентироваться в мире онлайн-обучения.\n"
         "Спроси — и получи честный, понятный ответ 🧠"
     )
 
@@ -109,33 +102,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
-            row = cur.fetchone()
-            name, greeted = row if row else (None, False)
-
-            if name and not greeted:
-                await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
-                cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
-                conn.commit()
+        with psycopg2.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
+                row = cur.fetchone()
+                name, greeted = row if row else (None, False)
+                if name and not greeted:
+                    await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
+                    cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
+                    conn.commit()
 
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
-                thread_id=threads[user_id],
-                role=msg.role,
-                content=msg.content
+                thread_id=threads[user_id], role=msg.role, content=msg.content
             )
 
         client.beta.threads.messages.create(
-            thread_id=threads[user_id],
-            role="user",
-            content=user_input
+            thread_id=threads[user_id], role="user", content=user_input
         )
 
         client.beta.threads.runs.create_and_poll(
-            thread_id=threads[user_id],
-            assistant_id=assistant_id
+            thread_id=threads[user_id], assistant_id=assistant_id
         )
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
@@ -150,26 +138,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
-# Регистрируем обработчики
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
 # Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-
     async def process():
         await telegram_app.initialize()
         await telegram_app.process_update(update)
-
     try:
-        asyncio.get_event_loop().create_task(process())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(process())
-
+        asyncio.run(process())
+    except Exception as e:
+        print("Webhook error:", e)
     return "OK", 200
 
 # Keep Alive Ping
@@ -195,13 +174,14 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (user_id, name, greeted)
-                VALUES (%s, %s, TRUE)
-                ON CONFLICT (user_id) DO NOTHING
-            """, (user_id, user_name))
-            conn.commit()
+        with psycopg2.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (user_id, name, greeted)
+                    VALUES (%s, %s, TRUE)
+                    ON CONFLICT (user_id) DO NOTHING
+                """, (user_id, user_name))
+                conn.commit()
 
         if user_id not in threads:
             thread = client.beta.threads.create()
@@ -210,20 +190,15 @@ def web_chat():
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
-                thread_id=threads[user_id],
-                role=msg.role,
-                content=msg.content
+                thread_id=threads[user_id], role=msg.role, content=msg.content
             )
 
         client.beta.threads.messages.create(
-            thread_id=threads[user_id],
-            role="user",
-            content=user_message
+            thread_id=threads[user_id], role="user", content=user_message
         )
 
         run = client.beta.threads.runs.create_and_poll(
-            thread_id=threads[user_id],
-            assistant_id=assistant_id
+            thread_id=threads[user_id], assistant_id=assistant_id
         )
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
@@ -237,7 +212,7 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-# Запуск Flask
+# Запуск
 if __name__ == "__main__":
-    print("🤖 Бот HitCourse (Webhook + Assistant API + PostgreSQL) запущен на Railway")
+    print("🤖 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
