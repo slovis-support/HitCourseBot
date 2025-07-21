@@ -67,26 +67,27 @@ threads = {}
 
 # Подключение PostgreSQL
 conn = psycopg2.connect(database_url)
-cur = conn.cursor()
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id TEXT PRIMARY KEY,
-    name TEXT,
-    greeted BOOLEAN DEFAULT FALSE
-)
-""")
-conn.commit()
+with conn.cursor() as cur:
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        name TEXT,
+        greeted BOOLEAN DEFAULT FALSE
+    )
+    """)
+    conn.commit()
 
 # Обработчики Telegram
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
-    cur.execute("""
-        INSERT INTO users (user_id, name, greeted)
-        VALUES (%s, %s, TRUE)
-        ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
-    """, (user_id, name))
-    conn.commit()
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO users (user_id, name, greeted)
+            VALUES (%s, %s, TRUE)
+            ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
+        """, (user_id, name))
+        conn.commit()
 
     await update.message.reply_text(
         f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
@@ -108,14 +109,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
-        row = cur.fetchone()
-        name, greeted = row if row else (None, False)
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
+            row = cur.fetchone()
+            name, greeted = row if row else (None, False)
 
-        if name and not greeted:
-            await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
-            cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
-            conn.commit()
+            if name and not greeted:
+                await update.message.reply_text(f"Рад снова видеть, {name}! 😊")
+                cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
+                conn.commit()
 
         history = get_last_messages(user_id, limit=10)
         for msg in history:
@@ -193,12 +195,13 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
-        cur.execute("""
-            INSERT INTO users (user_id, name, greeted)
-            VALUES (%s, %s, TRUE)
-            ON CONFLICT (user_id) DO NOTHING
-        """, (user_id, user_name))
-        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (user_id, name, greeted)
+                VALUES (%s, %s, TRUE)
+                ON CONFLICT (user_id) DO NOTHING
+            """, (user_id, user_name))
+            conn.commit()
 
         if user_id not in threads:
             thread = client.beta.threads.create()
