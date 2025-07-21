@@ -74,19 +74,22 @@ with psycopg2.connect(DATABASE_URL) as conn:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
-    with psycopg2.connect(DATABASE_URL) as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (user_id, name, greeted)
-                VALUES (%s, %s, TRUE)
-                ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
-            """, (user_id, name))
-            conn.commit()
+    try:
+        with psycopg2.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (user_id, name, greeted)
+                    VALUES (%s, %s, TRUE)
+                    ON CONFLICT (user_id) DO UPDATE SET name = EXCLUDED.name, greeted = TRUE
+                """, (user_id, name))
+                conn.commit()
 
-    await update.message.reply_text(
-        f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
-        "Спроси — и получи честный, понятный ответ 🧠"
-    )
+        await update.message.reply_text(
+            f"Привет, {name}! Я — Словис, помощник платформы Хиткурс.\n"
+            "Спроси — и получи честный, понятный ответ 🧠"
+        )
+    except Exception as e:
+        print("Ошибка в start:", e)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -152,6 +155,7 @@ def telegram_webhook():
     return "OK", 200
 
 # Keep Alive Ping
+
 def keep_alive_ping():
     while True:
         try:
