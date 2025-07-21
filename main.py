@@ -29,6 +29,9 @@ Base.metadata.create_all(bind=engine)
 
 # Telegram и Flask
 telegram_app = ApplicationBuilder().token(telegram_token).build()
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
 flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
@@ -161,7 +164,6 @@ def telegram_webhook():
     return "OK", 200
 
 # Keep Alive Ping
-
 def keep_alive_ping():
     while True:
         try:
