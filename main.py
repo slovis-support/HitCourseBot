@@ -6,7 +6,8 @@ import requests
 import psycopg2
 from flask import Flask, request
 from flask_cors import CORS
-from telegram import Update, ChatAction
+from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
 from sqlalchemy import create_engine
@@ -41,16 +42,21 @@ def save_message(user_id, role, content):
     db.close()
 
 def get_last_messages(user_id, limit=10):
-    db = SessionLocal()
-    messages = (
-        db.query(Message)
-        .filter(Message.user_id == user_id)
-        .order_by(Message.timestamp.desc())
-        .limit(limit)
-        .all()
-    )
-    db.close()
-    return reversed(messages)
+    try:
+        db = SessionLocal()
+        messages = (
+            db.query(Message)
+            .filter(Message.user_id == user_id)
+            .order_by(Message.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        return reversed(messages)
+    except Exception as e:
+        print("Ошибка при загрузке истории:", e)
+        return []
+    finally:
+        db.close()
 
 def clear_messages(user_id):
     db = SessionLocal()
@@ -96,8 +102,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     user_input = update.message.text
 
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-
     if user_input.strip().lower() == "/clear":
         clear_messages(user_id)
         await update.message.reply_text("История очищена 🗑️")
@@ -108,6 +112,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
@@ -128,29 +134,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id=threads[user_id], role="user", content=user_input
         )
 
-        run = client.beta.threads.runs.create(
+        client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id], assistant_id=assistant_id
         )
 
-        timeout = 30
-        start_time = time.time()
-
-        while run.status not in ["completed", "failed", "cancelled"]:
-            if time.time() - start_time > timeout:
-                print("❌ GPT run timeout")
-                await update.message.reply_text("⚠️ Превышено время ожидания ответа. Попробуй ещё раз.")
-                return
-            time.sleep(1)
-            run = client.beta.threads.runs.retrieve(thread_id=threads[user_id], run_id=run.id)
-
-        if run.status == "completed":
-            messages = client.beta.threads.messages.list(thread_id=threads[user_id])
-            answer = next(
-                (msg.content[0].text.value for msg in reversed(messages.data) if msg.role == "assistant"),
-                "⚠️ Не удалось получить ответ от GPT"
-            )
-        else:
-            answer = "⚠️ GPT не завершил обработку. Попробуй позже."
+        messages = client.beta.threads.messages.list(thread_id=threads[user_id])
+        answer = messages.data[0].content[0].text.value
 
         save_message(user_id, "user", user_input)
         save_message(user_id, "assistant", answer)
@@ -161,9 +150,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
+# Добавляем хендлеры
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+# Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -178,6 +169,8 @@ def telegram_webhook():
         print("Webhook error:", e)
     return "OK", 200
 
+# Keep Alive Ping
+
 def keep_alive_ping():
     while True:
         try:
@@ -188,6 +181,7 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
+# WebApp Route
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -222,28 +216,11 @@ def web_chat():
             thread_id=threads[user_id], role="user", content=user_message
         )
 
-        run = client.beta.threads.runs.create(
+        run = client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id], assistant_id=assistant_id
         )
-
-        timeout = 30
-        start_time = time.time()
-
-        while run.status not in ["completed", "failed", "cancelled"]:
-            if time.time() - start_time > timeout:
-                print("❌ GPT run timeout")
-                return {"reply": "⚠️ Превышено время ожидания ответа. Попробуйте ещё раз."}, 500
-            time.sleep(1)
-            run = client.beta.threads.runs.retrieve(thread_id=threads[user_id], run_id=run.id)
-
-        if run.status == "completed":
-            messages = client.beta.threads.messages.list(thread_id=threads[user_id])
-            reply = next(
-                (msg.content[0].text.value for msg in reversed(messages.data) if msg.role == "assistant"),
-                "⚠️ Не удалось получить ответ от GPT"
-            )
-        else:
-            reply = "⚠️ GPT не завершил обработку. Попробуйте позже."
+        messages = client.beta.threads.messages.list(thread_id=threads[user_id])
+        reply = messages.data[0].content[0].text.value
 
         save_message(user_id, "user", user_message)
         save_message(user_id, "assistant", reply)
@@ -254,6 +231,7 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
+# Запуск
 if __name__ == "__main__":
     print("\U0001F9D0 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
