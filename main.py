@@ -7,7 +7,6 @@ import psycopg2
 from flask import Flask, request
 from flask_cors import CORS
 from telegram import Update
-from telegram.constants import ChatAction
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 from openai import OpenAI
 from sqlalchemy import create_engine
@@ -42,21 +41,16 @@ def save_message(user_id, role, content):
     db.close()
 
 def get_last_messages(user_id, limit=10):
-    try:
-        db = SessionLocal()
-        messages = (
-            db.query(Message)
-            .filter(Message.user_id == user_id)
-            .order_by(Message.timestamp.desc())
-            .limit(limit)
-            .all()
-        )
-        return reversed(messages)
-    except Exception as e:
-        print("Ошибка при загрузке истории:", e)
-        return []
-    finally:
-        db.close()
+    db = SessionLocal()
+    messages = (
+        db.query(Message)
+        .filter(Message.user_id == user_id)
+        .order_by(Message.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    db.close()
+    return reversed(messages)
 
 def clear_messages(user_id):
     db = SessionLocal()
@@ -112,8 +106,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
-
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
@@ -134,8 +126,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id=threads[user_id], role="user", content=user_input
         )
 
-        client.beta.threads.runs.create_and_poll(
-            thread_id=threads[user_id], assistant_id=assistant_id
+        run = await asyncio.to_thread(
+            client.beta.threads.runs.create_and_poll,
+            thread_id=threads[user_id],
+            assistant_id=assistant_id
         )
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
@@ -154,7 +148,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Webhook
+# Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
