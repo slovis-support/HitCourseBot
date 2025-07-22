@@ -104,6 +104,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("Ошибка в start:", e)
 
+from telegram.constants import ChatAction
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
@@ -119,6 +121,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
+        # Показываем «Словис печатает...»
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+        # Грузим имя и статус приветствия
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
@@ -129,20 +135,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
                     conn.commit()
 
+        # Загружаем историю
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
                 thread_id=threads[user_id], role=msg.role, content=msg.content
             )
 
+        # Отправляем новое сообщение
         client.beta.threads.messages.create(
             thread_id=threads[user_id], role="user", content=user_input
         )
 
+        # Запуск и получение ответа
         client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id], assistant_id=assistant_id
         )
-
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
@@ -150,6 +158,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_message(user_id, "assistant", answer)
 
         await update.message.reply_text(answer)
+
+    except Exception as e:
+        print("Ошибка OpenAI:", e)
+        await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
     except Exception as e:
         print("Ошибка OpenAI:", e)
