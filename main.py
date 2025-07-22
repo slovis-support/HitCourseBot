@@ -22,8 +22,8 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
 webhook_path = "/webhook"
 
-# SQLAlchemy
-engine = create_engine(DATABASE_URL)
+# SQLAlchemy с проверкой подключения
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base.metadata.create_all(bind=engine)
 
@@ -36,27 +36,40 @@ threads = {}
 
 def save_message(user_id, role, content):
     db = SessionLocal()
-    db.add(Message(user_id=user_id, role=role, content=content))
-    db.commit()
-    db.close()
+    try:
+        db.add(Message(user_id=user_id, role=role, content=content))
+        db.commit()
+    except Exception as e:
+        print("Ошибка при сохранении сообщения:", e)
+    finally:
+        db.close()
 
 def get_last_messages(user_id, limit=10):
     db = SessionLocal()
-    messages = (
-        db.query(Message)
-        .filter(Message.user_id == user_id)
-        .order_by(Message.timestamp.desc())
-        .limit(limit)
-        .all()
-    )
-    db.close()
-    return reversed(messages)
+    try:
+        messages = (
+            db.query(Message)
+            .filter(Message.user_id == user_id)
+            .order_by(Message.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        return reversed(messages)
+    except Exception as e:
+        print("Ошибка при получении истории:", e)
+        return []
+    finally:
+        db.close()
 
 def clear_messages(user_id):
     db = SessionLocal()
-    db.query(Message).filter(Message.user_id == user_id).delete()
-    db.commit()
-    db.close()
+    try:
+        db.query(Message).filter(Message.user_id == user_id).delete()
+        db.commit()
+    except Exception as e:
+        print("Ошибка при очистке истории:", e)
+    finally:
+        db.close()
 
 # Создание таблицы users
 with psycopg2.connect(DATABASE_URL) as conn:
@@ -126,10 +139,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id=threads[user_id], role="user", content=user_input
         )
 
-        run = await asyncio.to_thread(
-            client.beta.threads.runs.create_and_poll,
-            thread_id=threads[user_id],
-            assistant_id=assistant_id
+        client.beta.threads.runs.create_and_poll(
+            thread_id=threads[user_id], assistant_id=assistant_id
         )
 
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
@@ -144,11 +155,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("Ошибка OpenAI:", e)
         await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
-# Добавляем хендлеры
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# Обработка Webhook
 @flask_app.route(webhook_path, methods=["POST"])
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
@@ -163,8 +172,6 @@ def telegram_webhook():
         print("Webhook error:", e)
     return "OK", 200
 
-# Keep Alive Ping
-
 def keep_alive_ping():
     while True:
         try:
@@ -175,7 +182,6 @@ def keep_alive_ping():
 
 threading.Thread(target=keep_alive_ping, daemon=True).start()
 
-# WebApp Route
 @flask_app.route("/message", methods=["POST"])
 def web_chat():
     try:
@@ -225,7 +231,6 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-# Запуск
 if __name__ == "__main__":
     print("\U0001F9D0 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
