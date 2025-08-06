@@ -36,19 +36,59 @@ CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
 threads = {}
 
-# 🔧 Форматирование ссылок
+# 🔧 Улучшенное форматирование ссылок
 def format_links(text, platform):
+    # Список специальных ссылок для преобразования
+    special_links = {
+        "Подробнее о курсе": "https://hitcourse.ru/course",
+        "Контакты": "https://hitcourse.ru/contacts",
+        "Поддержка": "mailto:support@hitcourse.ru",
+        "Telegram оператор": "https://t.me/operatorhitcourse",
+        "Наш бот": "https://t.me/hitcourse_bot"
+    }
+    
+    # Обработка специальных ссылок
+    for text_link, url in special_links.items():
+        if text_link in text:
+            if platform == "telegram":
+                replacement = f"[{text_link}]({url})"
+            elif platform == "site":
+                replacement = f'<a href="{url}" target="_blank">{text_link}</a>'
+            text = text.replace(text_link, replacement)
+    
+    # Обработка обычных URL
     url_pattern = r"(https?://[^\s]+)"
     matches = re.findall(url_pattern, text)
     for url in matches:
         if platform == "telegram":
-            replacement = f"[Подробнее]({url})"
+            replacement = f"[Перейти по ссылке]({url})"
         elif platform == "site":
-            replacement = f'<a href="{url}" target="_blank">Подробнее</a>'
+            replacement = f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
         else:
             replacement = url
         text = text.replace(url, replacement)
+    
     return text
+
+# 🔧 Проверка запроса оператору
+def check_operator_request(text):
+    operator_phrases = [
+        "хочу оператора", 
+        "свяжите с оператором",
+        "можно поговорить с человеком",
+        "живой оператор"
+    ]
+    return any(phrase in text.lower() for phrase in operator_phrases)
+
+# 🔧 Уведомление оператора
+def notify_operator(user_id, platform, username=None):
+    message = f"⚠️ Пользователь {username or user_id} ({platform}) хочет связаться с оператором!"
+    if platform == "telegram":
+        message += f"\nСсылка: tg://resolve?domain={username or user_id}"
+    
+    # Здесь должна быть ваша реализация отправки уведомления
+    print(f"[OPERATOR NOTIFY] {message}")
+    # send_to_admin_chat(message)
 
 def save_message(user_id, role, content):
     db = SessionLocal()
@@ -120,7 +160,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("Ошибка в start:", e)
 
-# Telegram: сообщения
+# Telegram: обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
@@ -130,6 +170,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if clean_input.strip().lower() == "/clear":
         clear_messages(user_id)
         await update.message.reply_text("История очищена 🗑️")
+        return
+
+    # Проверка запроса оператора
+    if check_operator_request(clean_input):
+        notify_operator(user_id, "telegram", update.effective_user.username)
+        await update.message.reply_text(
+            "Сейчас свяжу вас с оператором. Ожидайте...\n"
+            "Или напишите напрямую: @operatorhitcourse"
+        )
         return
 
     if user_id not in threads:
@@ -216,6 +265,18 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
+        # Проверка запроса оператора
+        if check_operator_request(clean_message):
+            notify_operator(user_id, "site", user_name)
+            return {
+                "reply": (
+                    "Наш оператор скоро с вами свяжется. "
+                    "Или вы можете написать напрямую: "
+                    '<a href="https://t.me/operatorhitcourse" target="_blank">@operatorhitcourse</a>'
+                ),
+                "html": True
+            }, 200
+
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -250,7 +311,7 @@ def web_chat():
         save_message(user_id, "user", clean_message)
         save_message(user_id, "assistant", reply)
 
-        return {"reply": formatted_reply}
+        return {"reply": formatted_reply, "html": True}
 
     except Exception as e:
         print("Ошибка в /message:", e)
