@@ -109,7 +109,8 @@ from telegram.constants import ChatAction
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
-    user_input = update.message.text
+    user_input = f"[telegram] {update.message.text}"
+
 
     if user_input.strip().lower() == "/clear":
         clear_messages(user_id)
@@ -198,7 +199,8 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 def web_chat():
     try:
         data = request.get_json()
-        user_message = data.get("message", "")
+        user_message = f"[site] {data.get('message', '')}"
+
         user_id = data.get("user_id", "web_user")
         user_name = data.get("name", "Гость")
 
