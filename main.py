@@ -1,4 +1,5 @@
 import os
+import re
 import asyncio
 import threading
 import time
@@ -8,6 +9,7 @@ from flask import Flask, request
 from flask_cors import CORS
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.constants import ChatAction
 from openai import OpenAI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -22,7 +24,7 @@ telegram_token = os.getenv("TELEGRAM_TOKEN")
 webhook_url = os.getenv("WEBHOOK_URL")
 webhook_path = "/webhook"
 
-# SQLAlchemy с проверкой подключения
+# SQLAlchemy
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -33,6 +35,20 @@ flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
 threads = {}
+
+# 🔧 Форматирование ссылок
+def format_links(text, platform):
+    url_pattern = r"(https?://[^\s]+)"
+    matches = re.findall(url_pattern, text)
+    for url in matches:
+        if platform == "telegram":
+            replacement = f"[Подробнее]({url})"
+        elif platform == "site":
+            replacement = f'<a href="{url}" target="_blank">Подробнее</a>'
+        else:
+            replacement = url
+        text = text.replace(url, replacement)
+    return text
 
 def save_message(user_id, role, content):
     db = SessionLocal()
@@ -83,7 +99,7 @@ with psycopg2.connect(DATABASE_URL) as conn:
         """)
         conn.commit()
 
-# Обработчики Telegram
+# Telegram: /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     name = update.effective_user.first_name
@@ -104,15 +120,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("Ошибка в start:", e)
 
-from telegram.constants import ChatAction
-
+# Telegram: сообщения
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
-    user_input = f"[telegram] {update.message.text}"
+    clean_input = update.message.text
+    user_input = f"[telegram] {clean_input}"
 
-
-    if user_input.strip().lower() == "/clear":
+    if clean_input.strip().lower() == "/clear":
         clear_messages(user_id)
         await update.message.reply_text("История очищена 🗑️")
         return
@@ -122,10 +137,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         threads[user_id] = thread.id
 
     try:
-        # Показываем «Словис печатает...»
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
 
-        # Грузим имя и статус приветствия
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT name, greeted FROM users WHERE user_id = %s", (user_id,))
@@ -136,33 +149,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     cur.execute("UPDATE users SET greeted = TRUE WHERE user_id = %s", (user_id,))
                     conn.commit()
 
-        # Загружаем историю
         history = get_last_messages(user_id, limit=10)
         for msg in history:
             client.beta.threads.messages.create(
                 thread_id=threads[user_id], role=msg.role, content=msg.content
             )
 
-        # Отправляем новое сообщение
         client.beta.threads.messages.create(
             thread_id=threads[user_id], role="user", content=user_input
         )
 
-        # Запуск и получение ответа
         client.beta.threads.runs.create_and_poll(
             thread_id=threads[user_id], assistant_id=assistant_id
         )
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
-        save_message(user_id, "user", user_input)
+        formatted_answer = format_links(answer, platform="telegram")
+
+        save_message(user_id, "user", clean_input)
         save_message(user_id, "assistant", answer)
 
-        await update.message.reply_text(answer)
-
-    except Exception as e:
-        print("Ошибка OpenAI:", e)
-        await update.message.reply_text("Произошла ошибка. Попробуй позже.")
+        await update.message.reply_text(formatted_answer, parse_mode="Markdown")
 
     except Exception as e:
         print("Ошибка OpenAI:", e)
@@ -199,7 +207,8 @@ threading.Thread(target=keep_alive_ping, daemon=True).start()
 def web_chat():
     try:
         data = request.get_json()
-        user_message = f"[site] {data.get('message', '')}"
+        clean_message = data.get("message", "")
+        user_message = f"[site] {clean_message}"
 
         user_id = data.get("user_id", "web_user")
         user_name = data.get("name", "Гость")
@@ -236,15 +245,17 @@ def web_chat():
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
-        save_message(user_id, "user", user_message)
+        formatted_reply = format_links(reply, platform="site")
+
+        save_message(user_id, "user", clean_message)
         save_message(user_id, "assistant", reply)
 
-        return {"reply": reply}
+        return {"reply": formatted_reply}
 
     except Exception as e:
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
 if __name__ == "__main__":
-    print("\U0001F9D0 Бот HitCourse запущен")
+    print("🧠 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
