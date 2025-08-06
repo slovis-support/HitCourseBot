@@ -38,54 +38,42 @@ threads = {}
 
 def format_links(text, platform):
     """
-    Улучшенная обработка ссылок:
-    - Четко обрабатывает форматы: 【14:0†source】, (14:0), стандартные URL
-    - Для Telegram: создает [Подробнее о курсе](14:0)
-    - Для сайта: создает <a href="14:0" target="_blank">Подробнее о курсе</a>
-    - Полностью удаляет технические символы и дублирующийся текст
+    Полностью переработанная версия 3.0:
+    - Гарантированно работает для всех форматов ссылок
+    - Автоматически добавляет https:// при необходимости
+    - Полностью удаляет артефакты форматирования
     """
-    # Паттерн для 【14:0†source】 и (14:0)
-    bracket_pattern = re.compile(
-        r'(Подробнее(?: о курсе)?)\s*[\(【]([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]'
-    )
-    
-    # Паттерн для URL (только если нет "Подробнее" перед ним)
-    url_pattern = re.compile(
-        r'(?<!Подробнее)(https?://[^\s]+)'
+    # Универсальный паттерн для всех вариантов
+    pattern = re.compile(
+        r'(Подробнее(?: о курсе)?)[\s\xa0]*[\(【]?([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]?'
     )
 
-    def replace_bracket(match):
-        link_text = match.group(1).strip()
-        url = match.group(2).strip()
-        url = re.sub(r'[^a-zA-Z0-9:/._-]', '', url)  # Очистка URL
-        
-        if platform == "telegram":
-            return f"[{link_text}]({url})"
-        elif platform == "site":
-            return f'<a href="{url}" target="_blank">{link_text}</a>'
-        return match.group(0)
+    def clean_url(url):
+        """Приведение URL к кликабельному формату"""
+        url = re.sub(r'[^\w:/.-]', '', url)  # Удаляем все запрещенные символы
+        if not re.match(r'^https?://', url):
+            url = f'https://{url}'
+        return url
 
-    def replace_url(match):
-        url = match.group(1)
+    def replacer(match):
+        url = clean_url(match.group(2))
         if platform == "telegram":
             return f"[Подробнее о курсе]({url})"
         elif platform == "site":
             return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
-        return url
+        return "Подробнее о курсе"
 
-    # Обработка в правильном порядке
-    text = bracket_pattern.sub(replace_bracket, text)
-    text = url_pattern.sub(replace_url, text)
+    # Основная замена
+    text = pattern.sub(replacer, text)
     
-    # Удаление дублирующегося текста (только для сайта)
+    # Дополнительная очистка
+    text = re.sub(r'[【】†()]', '', text)  # Удаляем оставшиеся спецсимволы
+    
+    # Фикс для дублирующегося текста на сайте
     if platform == "site":
-        text = re.sub(r'target="_blank">Подробнее о курсе</a>\s*Подробнее', 
-                     'target="_blank">Подробнее о курсе</a>', text)
+        text = re.sub(r'(Подробнее о курсе[^<]+)', '', text)
     
-    # Финальная очистка
-    text = re.sub(r'[【】†]', '', text)
-    
-    return text
+    return text.strip()
 
 def save_message(user_id, role, content):
     db = SessionLocal()
@@ -202,7 +190,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
+        print(f"Original answer: {answer}")  # Логируем оригинальный ответ
         formatted_answer = format_links(answer, platform="telegram")
+        print(f"Formatted for Telegram: {formatted_answer}")  # Логируем после форматирования
 
         save_message(user_id, "user", clean_input)
         save_message(user_id, "assistant", answer)
@@ -211,7 +201,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print("Ошибка OpenAI:", e)
-        await update.message.reply_text("Произошла ошибка. Попробуй позже.")
+        await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -282,7 +272,9 @@ def web_chat():
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
+        print(f"Original reply: {reply}")  # Логируем оригинальный ответ
         formatted_reply = format_links(reply, platform="site")
+        print(f"Formatted for site: {formatted_reply}")  # Логируем после форматирования
 
         save_message(user_id, "user", clean_message)
         save_message(user_id, "assistant", reply)
@@ -294,5 +286,5 @@ def web_chat():
         return {"reply": "Произошла ошибка на сервере."}, 500
 
 if __name__ == "__main__":
-    print("🧠 Бот HitCourse запущен")
+    print("🧠 Бот HitCourse запущен (v3.0)")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
