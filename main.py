@@ -42,12 +42,13 @@ def format_links(text, platform):
     - Обрабатывает форматы: 【14:0†source】 и (https://example.com)
     - Для Telegram: [текст](url)
     - Для сайта: <a href="url" target="_blank">текст</a>
+    - Удаляет лишние символы из URL
     """
-    # Обработка специальных ссылок вида "Подробнее о курсе【14:0†source】"
-    special_pattern = re.compile(r'(Подробнее(?: о курсе)?)\s*[\(【]([^\s\)】]+)[\)】]')
+    # Обработка специальных ссылок вида "Подробнее【14:0†source】"
+    pattern = re.compile(r'(Подробнее(?: о курсе)?)[\(【]([^\s\)】]+)[\)】]')
     
-    def replace_special(match):
-        link_text = match.group(1)
+    def replace_match(match):
+        link_text = match.group(1).strip()
         url = match.group(2).strip()
         
         # Очищаем URL от лишних символов
@@ -60,13 +61,16 @@ def format_links(text, platform):
             return f'<a href="{url}" target="_blank">{link_text}</a>'
         return match.group(0)
     
-    text = special_pattern.sub(replace_special, text)
+    text = pattern.sub(replace_match, text)
+    
+    # Удаляем оставшиеся артефакты
+    text = text.replace("target=\"_blank\">", "").replace("Перейти по ссылке", "Подробнее")
     
     # Обработка обычных URL
     url_pattern = r"(https?://[^\s]+)"
     text = re.sub(url_pattern, 
-                lambda m: (f"[Перейти по ссылке]({m.group(0)})" if platform == "telegram" 
-                         else f'<a href="{m.group(0)}" target="_blank">Перейти по ссылке</a>'), 
+                lambda m: (f"[Подробнее]({m.group(0)})" if platform == "telegram" 
+                         else f'<a href="{m.group(0)}" target="_blank">Подробнее</a>'), 
                 text)
     
     return text
