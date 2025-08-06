@@ -38,33 +38,33 @@ threads = {}
 
 def format_links(text, platform):
     """
-    Финальная улучшенная версия для обработки ссылок:
-    - Четко обрабатывает форматы: 【14:0†source】 и стандартные URL
+    Улучшенная обработка ссылок:
+    - Четко обрабатывает форматы: 【14:0†source】, (14:0), стандартные URL
     - Для Telegram: создает [Подробнее о курсе](14:0)
     - Для сайта: создает <a href="14:0" target="_blank">Подробнее о курсе</a>
-    - Полностью удаляет все технические символы
+    - Полностью удаляет технические символы и дублирующийся текст
     """
-    # Основной паттерн для обработки 【14:0†source】
-    main_pattern = re.compile(
+    # Паттерн для 【14:0†source】 и (14:0)
+    bracket_pattern = re.compile(
         r'(Подробнее(?: о курсе)?)\s*[\(【]([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]'
     )
     
-    # Паттерн для обычных URL
-    url_pattern = re.compile(r'(https?://[^\s]+)')
-    
-    def replace_main(match):
+    # Паттерн для URL (только если нет "Подробнее" перед ним)
+    url_pattern = re.compile(
+        r'(?<!Подробнее)(https?://[^\s]+)'
+    )
+
+    def replace_bracket(match):
         link_text = match.group(1).strip()
         url = match.group(2).strip()
-        
-        # Дополнительная очистка URL
-        url = re.sub(r'[^a-zA-Z0-9:/._-]', '', url)
+        url = re.sub(r'[^a-zA-Z0-9:/._-]', '', url)  # Очистка URL
         
         if platform == "telegram":
             return f"[{link_text}]({url})"
         elif platform == "site":
             return f'<a href="{url}" target="_blank">{link_text}</a>'
         return match.group(0)
-    
+
     def replace_url(match):
         url = match.group(1)
         if platform == "telegram":
@@ -72,12 +72,17 @@ def format_links(text, platform):
         elif platform == "site":
             return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
         return url
-    
-    # Последовательная обработка
-    text = main_pattern.sub(replace_main, text)
+
+    # Обработка в правильном порядке
+    text = bracket_pattern.sub(replace_bracket, text)
     text = url_pattern.sub(replace_url, text)
     
-    # Финальная очистка от возможных артефактов
+    # Удаление дублирующегося текста (только для сайта)
+    if platform == "site":
+        text = re.sub(r'target="_blank">Подробнее о курсе</a>\s*Подробнее', 
+                     'target="_blank">Подробнее о курсе</a>', text)
+    
+    # Финальная очистка
     text = re.sub(r'[【】†]', '', text)
     
     return text
