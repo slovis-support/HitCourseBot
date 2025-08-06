@@ -38,19 +38,21 @@ threads = {}
 
 def format_links(text, platform):
     """
-    Форматирует ссылки в тексте для указанной платформы
-    - Для Telegram: преобразует в Markdown [текст](url)
-    - Для сайта: преобразует в HTML <a href>
-    Особые случаи:
-    - "Подробнее о курсе (url)" → кликабельный текст со скрытым URL
-    - Обычные URL → преобразуются в кликабельные ссылки
+    Улучшенная функция форматирования ссылок:
+    - Обрабатывает форматы: 【14:0†source】 и (https://example.com)
+    - Для Telegram: [текст](url)
+    - Для сайта: <a href="url" target="_blank">текст</a>
     """
-    # Обработка специальных ссылок вида "Подробнее о курсе (url)"
-    pattern = re.compile(r'(Подробнее(?: о курсе)?)\s*\(?(https?://[^\s)]+)\)?')
+    # Обработка специальных ссылок вида "Подробнее о курсе【14:0†source】"
+    special_pattern = re.compile(r'(Подробнее(?: о курсе)?)\s*[\(【]([^\s\)】]+)[\)】]')
     
-    def replace_match(match):
+    def replace_special(match):
         link_text = match.group(1)
-        url = match.group(2).strip(')')
+        url = match.group(2).strip()
+        
+        # Очищаем URL от лишних символов
+        if '†' in url:
+            url = url.split('†')[0]
         
         if platform == "telegram":
             return f"[{link_text}]({url})"
@@ -58,14 +60,14 @@ def format_links(text, platform):
             return f'<a href="{url}" target="_blank">{link_text}</a>'
         return match.group(0)
     
-    text = pattern.sub(replace_match, text)
+    text = special_pattern.sub(replace_special, text)
     
     # Обработка обычных URL
     url_pattern = r"(https?://[^\s]+)"
     text = re.sub(url_pattern, 
-                 lambda m: (f"[Перейти по ссылке]({m.group(0)})" if platform == "telegram" 
-                          else f'<a href="{m.group(0)}" target="_blank">Перейти по ссылке</a>'), 
-                 text)
+                lambda m: (f"[Перейти по ссылке]({m.group(0)})" if platform == "telegram" 
+                         else f'<a href="{m.group(0)}" target="_blank">Перейти по ссылке</a>'), 
+                text)
     
     return text
 
