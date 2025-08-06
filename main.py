@@ -38,22 +38,26 @@ threads = {}
 
 def format_links(text, platform):
     """
-    Улучшенная функция форматирования ссылок:
-    - Обрабатывает форматы: 【14:0†source】 и (https://example.com)
-    - Для Telegram: [текст](url)
-    - Для сайта: <a href="url" target="_blank">текст</a>
-    - Удаляет лишние символы из URL
+    Финальная улучшенная версия для обработки ссылок:
+    - Четко обрабатывает форматы: 【14:0†source】 и стандартные URL
+    - Для Telegram: создает [Подробнее о курсе](14:0)
+    - Для сайта: создает <a href="14:0" target="_blank">Подробнее о курсе</a>
+    - Полностью удаляет все технические символы
     """
-    # Обработка специальных ссылок вида "Подробнее【14:0†source】"
-    pattern = re.compile(r'(Подробнее(?: о курсе)?)[\(【]([^\s\)】]+)[\)】]')
+    # Основной паттерн для обработки 【14:0†source】
+    main_pattern = re.compile(
+        r'(Подробнее(?: о курсе)?)\s*[\(【]([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]'
+    )
     
-    def replace_match(match):
+    # Паттерн для обычных URL
+    url_pattern = re.compile(r'(https?://[^\s]+)')
+    
+    def replace_main(match):
         link_text = match.group(1).strip()
         url = match.group(2).strip()
         
-        # Очищаем URL от лишних символов
-        if '†' in url:
-            url = url.split('†')[0]
+        # Дополнительная очистка URL
+        url = re.sub(r'[^a-zA-Z0-9:/._-]', '', url)
         
         if platform == "telegram":
             return f"[{link_text}]({url})"
@@ -61,17 +65,20 @@ def format_links(text, platform):
             return f'<a href="{url}" target="_blank">{link_text}</a>'
         return match.group(0)
     
-    text = pattern.sub(replace_match, text)
+    def replace_url(match):
+        url = match.group(1)
+        if platform == "telegram":
+            return f"[Подробнее о курсе]({url})"
+        elif platform == "site":
+            return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
+        return url
     
-    # Удаляем оставшиеся артефакты
-    text = text.replace("target=\"_blank\">", "").replace("Перейти по ссылке", "Подробнее")
+    # Последовательная обработка
+    text = main_pattern.sub(replace_main, text)
+    text = url_pattern.sub(replace_url, text)
     
-    # Обработка обычных URL
-    url_pattern = r"(https?://[^\s]+)"
-    text = re.sub(url_pattern, 
-                lambda m: (f"[Подробнее]({m.group(0)})" if platform == "telegram" 
-                         else f'<a href="{m.group(0)}" target="_blank">Подробнее</a>'), 
-                text)
+    # Финальная очистка от возможных артефактов
+    text = re.sub(r'[【】†]', '', text)
     
     return text
 
