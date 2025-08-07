@@ -4,6 +4,7 @@ import asyncio
 import threading
 import time
 import requests
+import psycopg2
 from flask import Flask, request
 from flask_cors import CORS
 from telegram import Update
@@ -12,6 +13,7 @@ from telegram.constants import ChatAction
 from openai import OpenAI
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from datetime import datetime
 from models import Base, User, Message
 
 # Переменные окружения
@@ -33,7 +35,6 @@ flask_app = Flask(__name__)
 CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
 threads = {}
-threads_lock = threading.Lock()  # Чтобы избежать гонок при доступе к threads
 
 def format_links(text, platform):
     """
@@ -42,12 +43,14 @@ def format_links(text, platform):
     - Автоматически добавляет https:// при необходимости
     - Полностью удаляет артефакты форматирования
     """
+    # Универсальный паттерн для всех вариантов
     pattern = re.compile(
         r'(Подробнее(?: о курсе)?)[\s\xa0]*[\(【]?([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]?'
     )
 
     def clean_url(url):
-        url = re.sub(r'[^\w:/.\-]', '', url)  # Удаляем запрещённые символы
+        """Приведение URL к кликабельному формату"""
+        url = re.sub(r'[^\w:/.-]', '', url)  # Удаляем все запрещенные символы
         if not re.match(r'^https?://', url):
             url = f'https://{url}'
         return url
@@ -57,16 +60,19 @@ def format_links(text, platform):
         if platform == "telegram":
             return f"[Подробнее о курсе]({url})"
         elif platform == "site":
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">Подробнее о курсе</a>'
+            return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
         return "Подробнее о курсе"
 
+    # Основная замена
     text = pattern.sub(replacer, text)
-    text = re.sub(r'[【】†()]', '', text)
-
+    
+    # Дополнительная очистка
+    text = re.sub(r'[【】†()]', '', text)  # Удаляем оставшиеся спецсимволы
+    
+    # Фикс для дублирующегося текста на сайте
     if platform == "site":
-        # Удаляем дублирующийся текст (если он есть)
         text = re.sub(r'(Подробнее о курсе[^<]+)', '', text)
-
+    
     return text.strip()
 
 def save_message(user_id, role, content):
@@ -106,10 +112,7 @@ def clear_messages(user_id):
     finally:
         db.close()
 
-# Работа с таблицей users через SQLAlchemy, а не вручную через psycopg2
-# Если нужно - можно добавить модель User и работать с ней, но пока оставим простую вставку с psycopg2 для совместимости
-
-import psycopg2
+# Создание таблицы users
 with psycopg2.connect(DATABASE_URL) as conn:
     with conn.cursor() as cur:
         cur.execute("""
@@ -154,11 +157,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("История очищена 🗑️")
         return
 
-    # Создаём поток с блокировкой
-    with threads_lock:
-        if user_id not in threads:
-            thread = client.beta.threads.create()
-            threads[user_id] = thread.id
+    if user_id not in threads:
+        thread = client.beta.threads.create()
+        threads[user_id] = thread.id
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
@@ -183,18 +184,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id=threads[user_id], role="user", content=user_input
         )
 
-        # Асинхронно ждём ответа от openai
-        run = await asyncio.to_thread(
-            lambda: client.beta.threads.runs.create_and_poll(
-                thread_id=threads[user_id], assistant_id=assistant_id
-            )
+        client.beta.threads.runs.create_and_poll(
+            thread_id=threads[user_id], assistant_id=assistant_id
         )
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
-        print(f"Original answer: {answer}")
+        print(f"Original answer: {answer}")  # Логируем оригинальный ответ
         formatted_answer = format_links(answer, platform="telegram")
-        print(f"Formatted for Telegram: {formatted_answer}")
+        print(f"Formatted for Telegram: {formatted_answer}")  # Логируем после форматирования
 
         save_message(user_id, "user", clean_input)
         save_message(user_id, "assistant", answer)
@@ -212,9 +210,7 @@ telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_
 def telegram_webhook():
     update = Update.de_json(request.get_json(force=True), telegram_app.bot)
     async def process():
-        # Инициализируем приложение, если ещё не инициализировано
-        if not telegram_app.is_running:
-            await telegram_app.initialize()
+        await telegram_app.initialize()
         await telegram_app.process_update(update)
     try:
         loop = asyncio.new_event_loop()
@@ -227,7 +223,7 @@ def telegram_webhook():
 def keep_alive_ping():
     while True:
         try:
-            requests.get(webhook_url, timeout=10)
+            requests.get(webhook_url)
         except Exception as e:
             print("Keep-alive error:", e)
         time.sleep(60)
@@ -244,7 +240,7 @@ def web_chat():
         user_id = data.get("user_id", "web_user")
         user_name = data.get("name", "Гость")
 
-        if not clean_message.strip():
+        if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
         with psycopg2.connect(DATABASE_URL) as conn:
@@ -256,10 +252,9 @@ def web_chat():
                 """, (user_id, user_name))
                 conn.commit()
 
-        with threads_lock:
-            if user_id not in threads:
-                thread = client.beta.threads.create()
-                threads[user_id] = thread.id
+        if user_id not in threads:
+            thread = client.beta.threads.create()
+            threads[user_id] = thread.id
 
         history = get_last_messages(user_id, limit=10)
         for msg in history:
@@ -277,9 +272,9 @@ def web_chat():
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
-        print(f"Original reply: {reply}")
+        print(f"Original reply: {reply}")  # Логируем оригинальный ответ
         formatted_reply = format_links(reply, platform="site")
-        print(f"Formatted for site: {formatted_reply}")
+        print(f"Formatted for site: {formatted_reply}")  # Логируем после форматирования
 
         save_message(user_id, "user", clean_message)
         save_message(user_id, "assistant", reply)
@@ -290,7 +285,9 @@ def web_chat():
         print("Ошибка в /message:", e)
         return {"reply": "Произошла ошибка на сервере."}, 500
 
-
 if __name__ == "__main__":
     print("🧠 Бот HitCourse запущен (v3.0)")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
+
+
