@@ -40,7 +40,7 @@ threads = {}
 # 🔧 Улучшенное форматирование ссылок
 
     
-    def format_links(text, platform):
+def format_links(text, platform):
     # Оборачиваем все ссылки на hitcourse.ru в кликабельные "Подробнее о курсе"
     def replace_url(match):
         url = match.group(0)
@@ -57,7 +57,7 @@ threads = {}
     text = re.sub(r"(Подробнее\s*:|Смотрите\s*:|Узнать\s+подробнее\s*:)", "", text, flags=re.IGNORECASE)
 
     return text
-
+   
 
 # 🔧 Проверка запроса оператору
 def check_operator_request(text):
