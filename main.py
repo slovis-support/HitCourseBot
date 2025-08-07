@@ -37,45 +37,59 @@ CORS(flask_app, resources={r"/*": {"origins": "https://hitcourse.ru"}})
 client = OpenAI(api_key=openai_api_key)
 threads = {}
 
+# 🔧 Улучшенное форматирование ссылок
 def format_links(text, platform):
-    """
-    Финальная версия 5.0:
-    - Гарантированно работающие ссылки в Telegram и на сайте
-    - Автоматическое исправление формата URL
-    - Полная очистка от артефактов
-    """
-    def prepare_url(url):
-        """Приведение URL к правильному формату"""
-        url = re.sub(r'[^\w:/.-]', '', url)
-        if not re.match(r'^https?://', url):
-            url = f'https://hitcourse.ru/{url.lstrip("/")}'
-        return url
-
-    # Паттерн для всех вариантов ссылок
-    pattern = re.compile(
-        r'(Подробнее(?: о курсе)?)[\s\xa0]*[\(【]?([^)\s】]+)(?:[†】][^)\s】]*)?[\)】]?'
-    )
-
-    def replacer(match):
-        url = prepare_url(match.group(2))
+    # Список специальных ссылок для преобразования
+    special_links = {
+        "Подробнее о курсе": "https://hitcourse.ru/course",
+        "Контакты": "https://hitcourse.ru/contacts",
+        "Поддержка": "mailto:support@hitcourse.ru",
+        "Telegram оператор": "https://t.me/operatorhitcourse",
+        "Наш бот": "https://t.me/hitcourse_bot"
+    }
+    
+    # Обработка специальных ссылок
+    for text_link, url in special_links.items():
+        if text_link in text:
+            if platform == "telegram":
+                replacement = f"[{text_link}]({url})"
+            elif platform == "site":
+                replacement = f'<a href="{url}" target="_blank">{text_link}</a>'
+            text = text.replace(text_link, replacement)
+    
+    # Обработка обычных URL
+    url_pattern = r"(https?://[^\s]+)"
+    matches = re.findall(url_pattern, text)
+    for url in matches:
         if platform == "telegram":
-            return f"[Подробнее о курсе]({url})"
+            replacement = f"[Перейти по ссылке]({url})"
         elif platform == "site":
-            return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
-        return match.group(0)
+            replacement = f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
+        else:
+            replacement = url
+        text = text.replace(url, replacement)
+    
+    return text
 
-    # Основная замена
-    text = pattern.sub(replacer, text)
+# 🔧 Проверка запроса оператору
+def check_operator_request(text):
+    operator_phrases = [
+        "хочу оператора", 
+        "свяжите с оператором",
+        "можно поговорить с человеком",
+        "живой оператор"
+    ]
+    return any(phrase in text.lower() for phrase in operator_phrases)
+
+# 🔧 Уведомление оператора
+def notify_operator(user_id, platform, username=None):
+    message = f"⚠️ Пользователь {username or user_id} ({platform}) хочет связаться с оператором!"
+    if platform == "telegram":
+        message += f"\nСсылка: tg://resolve?domain={username or user_id}"
     
-    # Дополнительная очистка
-    text = re.sub(r'[【】†()]', '', text)
-    
-    # Специфичные правки для сайта
-    if platform == "site":
-        text = re.sub(r'(Подробнее о курсе)[^<]+', '', text)
-        text = re.sub(r'(<a[^>]+>)\1?', r'\1', text)
-    
-    return text.strip()
+    # Здесь должна быть ваша реализация отправки уведомления
+    print(f"[OPERATOR NOTIFY] {message}")
+    # send_to_admin_chat(message)
 
 def save_message(user_id, role, content):
     db = SessionLocal()
@@ -147,7 +161,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         print("Ошибка в start:", e)
 
-# Telegram: сообщения
+# Telegram: обработка сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print("Получено сообщение от Telegram")
     user_id = str(update.effective_user.id)
@@ -157,6 +171,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if clean_input.strip().lower() == "/clear":
         clear_messages(user_id)
         await update.message.reply_text("История очищена 🗑️")
+        return
+
+    # Проверка запроса оператора
+    if check_operator_request(clean_input):
+        notify_operator(user_id, "telegram", update.effective_user.username)
+        await update.message.reply_text(
+            "Сейчас свяжу вас с оператором. Ожидайте...\n"
+            "Или напишите напрямую: @operatorhitcourse"
+        )
         return
 
     if user_id not in threads:
@@ -192,9 +215,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
 
-        print(f"Original answer: {answer}")
         formatted_answer = format_links(answer, platform="telegram")
-        print(f"Formatted for Telegram: {formatted_answer}")
 
         save_message(user_id, "user", clean_input)
         save_message(user_id, "assistant", answer)
@@ -203,7 +224,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print("Ошибка OpenAI:", e)
-        await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
+        await update.message.reply_text("Произошла ошибка. Попробуй позже.")
 
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -245,6 +266,18 @@ def web_chat():
         if not user_message.strip():
             return {"reply": "Пустое сообщение."}, 400
 
+        # Проверка запроса оператора
+        if check_operator_request(clean_message):
+            notify_operator(user_id, "site", user_name)
+            return {
+                "reply": (
+                    "Наш оператор скоро с вами свяжется. "
+                    "Или вы можете написать напрямую: "
+                    '<a href="https://t.me/operatorhitcourse" target="_blank">@operatorhitcourse</a>'
+                ),
+                "html": True
+            }, 200
+
         with psycopg2.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute("""
@@ -274,9 +307,7 @@ def web_chat():
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         reply = messages.data[0].content[0].text.value
 
-        print(f"Original reply: {reply}")
         formatted_reply = format_links(reply, platform="site")
-        print(f"Formatted for site: {formatted_reply}")
 
         save_message(user_id, "user", clean_message)
         save_message(user_id, "assistant", reply)
@@ -288,5 +319,5 @@ def web_chat():
         return {"reply": "Произошла ошибка на сервере."}, 500
 
 if __name__ == "__main__":
-    print("🧠 Бот HitCourse запущен (v5.0)")
+    print("🧠 Бот HitCourse запущен")
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
