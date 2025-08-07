@@ -202,6 +202,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         messages = client.beta.threads.messages.list(thread_id=threads[user_id])
         answer = messages.data[0].content[0].text.value
+        # Удаляем хвосты вида  ,   и подобные
+        answer = re.sub(r"【\d+(?::\d+)?†[^\】]+】", "", answer)
 
         formatted_answer = format_links(answer, platform="telegram")
 
