@@ -41,22 +41,42 @@ threads = {}
 
     
 def format_links(text, platform):
-    # Оборачиваем все ссылки на hitcourse.ru в кликабельные "Подробнее о курсе"
-    def replace_url(match):
+    # 🔹 Специальные фразы и ссылки
+    replacements = {
+        "Перейти на страницу контактов": "https://hitcourse.ru/contacts",
+        "Написать на почту": "mailto:support@hitcourse.ru",
+        "Связаться в Telegram": "https://t.me/operatorhitcourse",
+        "Наш бот": "https://t.me/hitcourse_bot",
+        "Подробнее о курсе": None  # обрабатывается отдельно через URL
+    }
+
+    # 🔹 Заменяем фразы на ссылки
+    for phrase, url in replacements.items():
+        if url and phrase in text:
+            if platform == "telegram":
+                text = text.replace(phrase, f"[{phrase}]({url})")
+            elif platform == "site":
+                text = text.replace(phrase, f'<a href="{url}" target="_blank">{phrase}</a>')
+
+    # 🔹 Оборачиваем прямые ссылки вида (...): https://...
+    def wrap_generic_url(match):
         url = match.group(0)
         if platform == "telegram":
-            return f"[Подробнее о курсе]({url})"
+            return f"[Перейти по ссылке]({url})"
         elif platform == "site":
-            return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
+            return f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
         return url
 
-    pattern = r"https?://(?:www\.)?hitcourse\.ru[^\s\]\)]*"
-    text = re.sub(pattern, replace_url, text)
+    text = re.sub(r"https?://[^\s\)\]]+", wrap_generic_url, text)
 
-    # Удалим лишние фразы, если ассистент уже что-то сказал вроде "Подробнее: ..."
+    # 🔹 Удалим фразы "Подробнее:" и т.п.
     text = re.sub(r"(Подробнее\s*:|Смотрите\s*:|Узнать\s+подробнее\s*:)", "", text, flags=re.IGNORECASE)
 
-    return text
+    # 🔹 Удалим JSON-функции типа notify_operator
+    text = re.sub(r"{\s*\"name\"\s*:\s*\"notify_operator\".*?}", "", text, flags=re.DOTALL)
+
+    return text.strip()
+
    
 
 # 🔧 Проверка запроса оператору
