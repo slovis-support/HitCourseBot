@@ -41,41 +41,44 @@ threads = {}
 
     
 def format_links(text, platform):
-    # 🔹 Специальные фразы и ссылки
+    # 🔹 Специальные текстовые фразы → кликабельные ссылки
     replacements = {
         "Перейти на страницу контактов": "https://hitcourse.ru/contacts",
         "Написать на почту": "mailto:support@hitcourse.ru",
         "Связаться в Telegram": "https://t.me/operatorhitcourse",
         "Наш бот": "https://t.me/hitcourse_bot",
-        "Подробнее о курсе": None  # обрабатывается отдельно через URL
     }
 
-    # 🔹 Заменяем фразы на ссылки
     for phrase, url in replacements.items():
-        if url and phrase in text:
+        if phrase in text:
             if platform == "telegram":
                 text = text.replace(phrase, f"[{phrase}]({url})")
             elif platform == "site":
                 text = text.replace(phrase, f'<a href="{url}" target="_blank">{phrase}</a>')
 
-    # 🔹 Оборачиваем прямые ссылки вида (...): https://...
+    # 🔹 Исправим дубли типа: [Текст](Текст (URL)) → [Текст](URL)
+    def fix_nested_links(match):
+        label = match.group(1)
+        url = match.group(2)
+        return f"[{label}]({url})" if platform == "telegram" else f'<a href="{url}" target="_blank">{label}</a>'
+
+    text = re.sub(r"\[([^\]]+)\]\s*\(.*?\(?\s*(https?://[^\s\)]+)\s*\)?\)", fix_nested_links, text)
+
+    # 🔹 Оборачиваем URL-адреса вида https://... (если остались)
     def wrap_generic_url(match):
         url = match.group(0)
-        if platform == "telegram":
-            return f"[Перейти по ссылке]({url})"
-        elif platform == "site":
-            return f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
-        return url
+        return f"[Перейти по ссылке]({url})" if platform == "telegram" else f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
 
-    text = re.sub(r"https?://[^\s\)\]]+", wrap_generic_url, text)
+    text = re.sub(r"(?<!\]\()(?<!href=\")https?://[^\s\)\]]+", wrap_generic_url, text)
 
-    # 🔹 Удалим фразы "Подробнее:" и т.п.
+    # 🔹 Удалим служебные фразы
     text = re.sub(r"(Подробнее\s*:|Смотрите\s*:|Узнать\s+подробнее\s*:)", "", text, flags=re.IGNORECASE)
 
     # 🔹 Удалим JSON-функции типа notify_operator
     text = re.sub(r"{\s*\"name\"\s*:\s*\"notify_operator\".*?}", "", text, flags=re.DOTALL)
 
     return text.strip()
+
 
    
 
