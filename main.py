@@ -38,38 +38,26 @@ client = OpenAI(api_key=openai_api_key)
 threads = {}
 
 # 🔧 Улучшенное форматирование ссылок
-def format_links(text, platform):
-    # Список специальных ссылок для преобразования
-    special_links = {
-        "Подробнее о курсе": "https://hitcourse.ru/course",
-        "Контакты": "https://hitcourse.ru/contacts",
-        "Поддержка": "mailto:support@hitcourse.ru",
-        "Telegram оператор": "https://t.me/operatorhitcourse",
-        "Наш бот": "https://t.me/hitcourse_bot"
-    }
+
     
-    # Обработка специальных ссылок
-    for text_link, url in special_links.items():
-        if text_link in text:
-            if platform == "telegram":
-                replacement = f"[{text_link}]({url})"
-            elif platform == "site":
-                replacement = f'<a href="{url}" target="_blank">{text_link}</a>'
-            text = text.replace(text_link, replacement)
-    
-    # Обработка обычных URL
-    url_pattern = r"(https?://[^\s]+)"
-    matches = re.findall(url_pattern, text)
-    for url in matches:
+    def format_links(text, platform):
+    # Оборачиваем все ссылки на hitcourse.ru в кликабельные "Подробнее о курсе"
+    def replace_url(match):
+        url = match.group(0)
         if platform == "telegram":
-            replacement = f"[Перейти по ссылке]({url})"
+            return f"[Подробнее о курсе]({url})"
         elif platform == "site":
-            replacement = f'<a href="{url}" target="_blank">Перейти по ссылке</a>'
-        else:
-            replacement = url
-        text = text.replace(url, replacement)
-    
+            return f'<a href="{url}" target="_blank">Подробнее о курсе</a>'
+        return url
+
+    pattern = r"https?://(?:www\.)?hitcourse\.ru[^\s\]\)]*"
+    text = re.sub(pattern, replace_url, text)
+
+    # Удалим лишние фразы, если ассистент уже что-то сказал вроде "Подробнее: ..."
+    text = re.sub(r"(Подробнее\s*:|Смотрите\s*:|Узнать\s+подробнее\s*:)", "", text, flags=re.IGNORECASE)
+
     return text
+
 
 # 🔧 Проверка запроса оператору
 def check_operator_request(text):
